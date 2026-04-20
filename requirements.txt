@@ -1,0 +1,8 @@
+ 
+requests
+python-dotenv
+streamlit
+mcp
+langgraph
+langchain-core
+langchain-cerebras

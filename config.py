@@ -1,0 +1,12 @@
+ 
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
+OPENMETADATA_URL = os.getenv("OPENMETADATA_URL")
+OPENMETADATA_JWT_TOKEN = os.getenv("OPENMETADATA_JWT_TOKEN")
+OPENMETADATA_EMAIL = os.getenv("OPENMETADATA_EMAIL")
+OPENMETADATA_PASSWORD = os.getenv("OPENMETADATA_PASSWORD")
