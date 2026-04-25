@@ -59,6 +59,7 @@ def main() -> None:
         trigger_failed_pipelines=not args.no_auto_trigger,
         notify_customer=not args.no_notify,
         run_immediately=not args.no_immediate_run,
+        emit_summary=True,
     )
 
     LOGGER.info(

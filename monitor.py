@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import argparse
+import signal
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -195,6 +198,7 @@ def create_scheduler(
     interval_minutes: int = 15,
     trigger_failed_pipelines: bool = True,
     notify_customer: bool = True,
+    emit_summary: bool = False,
     findings_path: str | Path = DEFAULT_FINDINGS_PATH,
     latest_report_path: str | Path | None = DEFAULT_LATEST_REPORT_PATH,
 ):
@@ -218,12 +222,13 @@ def create_scheduler(
 
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(
-        run_monitoring_cycle,
+        _run_monitoring_cycle_job,
         trigger="interval",
         minutes=interval_minutes,
         kwargs={
             "trigger_failed_pipelines": trigger_failed_pipelines,
             "notify_customer": notify_customer,
+            "emit_summary": emit_summary,
             "findings_path": findings_path,
             "latest_report_path": latest_report_path,
         },
@@ -242,6 +247,7 @@ def start_scheduler(
     trigger_failed_pipelines: bool = True,
     notify_customer: bool = True,
     run_immediately: bool = True,
+    emit_summary: bool = False,
     findings_path: str | Path = DEFAULT_FINDINGS_PATH,
     latest_report_path: str | Path | None = DEFAULT_LATEST_REPORT_PATH,
 ):
@@ -251,14 +257,16 @@ def start_scheduler(
         interval_minutes=interval_minutes,
         trigger_failed_pipelines=trigger_failed_pipelines,
         notify_customer=notify_customer,
+        emit_summary=emit_summary,
         findings_path=findings_path,
         latest_report_path=latest_report_path,
     )
     scheduler.start()
     if run_immediately:
-        run_monitoring_cycle(
+        _run_monitoring_cycle_job(
             trigger_failed_pipelines=trigger_failed_pipelines,
             notify_customer=notify_customer,
+            emit_summary=emit_summary,
             findings_path=findings_path,
             latest_report_path=latest_report_path,
         )
@@ -505,6 +513,43 @@ def _safe_call(
         return fallback
 
 
+def _run_monitoring_cycle_job(
+    *,
+    trigger_failed_pipelines: bool = True,
+    notify_customer: bool = True,
+    emit_summary: bool = False,
+    findings_path: str | Path = DEFAULT_FINDINGS_PATH,
+    latest_report_path: str | Path | None = DEFAULT_LATEST_REPORT_PATH,
+) -> MonitorReport:
+    report = run_monitoring_cycle(
+        trigger_failed_pipelines=trigger_failed_pipelines,
+        notify_customer=notify_customer,
+        findings_path=findings_path,
+        latest_report_path=latest_report_path,
+    )
+    if emit_summary:
+        print_report_summary(report)
+    return report
+
+
+def print_report_summary(report: MonitorReport) -> None:
+    summary = report.summary
+    print(
+        " | ".join(
+            [
+                f"Run: {report.run_id}",
+                f"Health Score: {report.health_score}/100",
+                f"Status: {report.status}",
+                f"Findings: {len(report.findings)}",
+                f"Critical: {summary.get('critical_findings', 0)}",
+                f"Warnings: {summary.get('warning_findings', 0)}",
+                f"Errors: {len(report.errors)}",
+            ]
+        ),
+        flush=True,
+    )
+
+
 def _find_governance_anomalies(
     tables: list[dict[str, Any]],
     unowned_tables: list[dict[str, Any]],
@@ -714,9 +759,71 @@ def _report_to_dict(report: MonitorReport) -> dict[str, Any]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Run DataSentinel monitoring.")
+    parser.add_argument(
+        "--interval-minutes",
+        type=int,
+        help="Run continuously at this interval instead of running once.",
+    )
+    parser.add_argument(
+        "--no-immediate-run",
+        action="store_true",
+        help="When using --interval-minutes, wait for the first scheduled interval.",
+    )
+    parser.add_argument(
+        "--no-auto-trigger",
+        action="store_true",
+        help="Disable autonomous failed-pipeline trigger actions.",
+    )
+    parser.add_argument(
+        "--no-notify",
+        action="store_true",
+        help="Disable customer notifications.",
+    )
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-    report = run_monitoring_cycle()
-    print(json.dumps(_report_to_dict(report), indent=2, ensure_ascii=False))
+
+    trigger_failed_pipelines = not args.no_auto_trigger
+    notify_customer = not args.no_notify
+
+    if args.interval_minutes is None:
+        report = run_monitoring_cycle(
+            trigger_failed_pipelines=trigger_failed_pipelines,
+            notify_customer=notify_customer,
+        )
+        print_report_summary(report)
+        print(json.dumps(_report_to_dict(report), indent=2, ensure_ascii=True))
+        return
+
+    stop_requested = False
+
+    def _request_stop(signum, _frame):
+        nonlocal stop_requested
+        LOGGER.info("Received signal %s. Stopping DataSentinel monitor...", signum)
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+
+    scheduler = start_scheduler(
+        interval_minutes=args.interval_minutes,
+        trigger_failed_pipelines=trigger_failed_pipelines,
+        notify_customer=notify_customer,
+        run_immediately=not args.no_immediate_run,
+        emit_summary=True,
+    )
+    LOGGER.info(
+        "DataSentinel monitor running every %s minute(s). Press Ctrl+C to stop.",
+        args.interval_minutes,
+    )
+
+    try:
+        while not stop_requested:
+            time.sleep(1)
+    finally:
+        scheduler.shutdown(wait=False)
+        LOGGER.info("DataSentinel monitor stopped.")
 
 
 if __name__ == "__main__":
