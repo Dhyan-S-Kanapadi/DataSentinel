@@ -6,7 +6,10 @@ import tools
 # ── MCP Server Setup ───────────────────────────────────────────
 mcp = FastMCP(
     name="OpenMetadata Workflow Agent",
-    description="An MCP server that lets you manage OpenMetadata through natural language using Cerebras Llama and LangGraph"
+    instructions=(
+        "An MCP server that lets you manage OpenMetadata through natural "
+        "language using Cerebras Llama and LangGraph"
+    ),
 )
 
 # ── MCP Tools ──────────────────────────────────────────────────
